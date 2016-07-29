@@ -91,12 +91,12 @@ class SocksClientException(RuntimeError):
 
 
 class SocksClientThread(threading.Thread):
-    def __init__(self, client_sock: socket.socket, client_address: tuple, daemon=None):
+    def __init__(self, client_sock: socket.socket, client_address: tuple, daemon=None, dbg_output: bool=False):
         super(SocksClientThread, self).__init__(daemon=daemon)
         self.client_sock = client_sock
         self.client_address = client_address
         client_name = str(client_address[0]) + ':' + str(client_address[1])
-        self.logger = createlogger('client [{0}]'.format(client_name), debug=True)
+        self.logger = createlogger('client [{0}]'.format(client_name), debug=dbg_output)
         self.dest_addr = ('0.0.0.0', 0)
         self.remote_sock = None
 
@@ -213,7 +213,7 @@ class SocksClientThread(threading.Thread):
         cmd = self.client_sock.recv(1)  # cmd
         self.client_sock.recv(1)        # rzv
         atyp = self.client_sock.recv(1)
-        self.logger.debug('  Cmd: {0}, atype {1}'.format(cmd, atyp))
+        # self.logger.debug('  Cmd: {0}, atype {1}'.format(cmd, atyp))
         if cmd != Socks5Const.CMD_CONNECT:
             self.reply_client_request_err(Socks5Const.REP_CMD_NOT_SUPPORTED)
             raise SocksClientException('Unknown command: {0}'.format(cmd))
@@ -227,7 +227,6 @@ class SocksClientThread(threading.Thread):
             raise SocksClientException('Unknown address type: {0}'.format(atyp))
         dest_port = self.recv_port()
         self.dest_addr = (dest_addr, dest_port)
-        self.logger.debug('  dest_addr: {0}'.format(self.dest_addr))
         #
         # TODO: place for check that destination address is allowed
         #
@@ -344,6 +343,7 @@ class SocksServer:
         self.address = ('0.0.0.0', 1080)
         self.allowed_ips = []
         self.should_exit = False
+        self.dbg_output = False
 
     def parse_args(self) -> bool:
         ap = argparse.ArgumentParser(description='Socks5 proxy server. It can be configured only through '
@@ -361,6 +361,7 @@ class SocksServer:
         self.opts['port'] = ns.port
         if ns.allow_ips != '':
             self.allowed_ips = ns.allow_ips.split(',')
+        self.dbg_output = ns.debug
         self.logger = createlogger('sockserver', debug=ns.debug)
         #
         self.logger.debug('SocksServer configured, port = {0}'.format(self.opts['port']))
@@ -390,7 +391,7 @@ class SocksServer:
                     # by default accepted client socket inherits listening socket timeout settings
                     # reset it to default
                     client_sock.settimeout(None)  # blocking mode
-                    sct = SocksClientThread(client_sock, client_address, daemon=True)
+                    sct = SocksClientThread(client_sock, client_address, daemon=True, dbg_output=self.dbg_output)
                     sct.start()
                 else:
                     # just close client socket
