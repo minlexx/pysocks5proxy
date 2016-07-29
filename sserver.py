@@ -369,8 +369,9 @@ class SocksServer:
         return True
 
     def start(self):
-        self.sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
         self.address = ('0.0.0.0', self.opts['port'])
+        self.sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(self.address)
         self.sock.listen(1)
         self.sock.settimeout(1)  # 1 sec
