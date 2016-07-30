@@ -9,6 +9,7 @@ import threading
 
 # global log message formatter
 g_log_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+g_num_threads_alive = 0
 
 
 # get "standard" logger for application, public api
@@ -101,7 +102,10 @@ class SocksClientThread(threading.Thread):
         self.remote_sock = None
 
     def run(self):
-        self.logger.info('Started thread for client {0}'.format(self.client_address))
+        global g_num_threads_alive
+        g_num_threads_alive += 1
+        self.logger.info('Started thread for client {0} ({1} threads alive)'.format(
+            self.client_address, g_num_threads_alive))
         try:
             # step 1. client connects and sends its auth methods supported
             self.receive_client_methods()
@@ -111,13 +115,20 @@ class SocksClientThread(threading.Thread):
             self.loop_send_recv()
         except SocksClientException as sce:
             self.logger.error('Error during client processing: {0}'.format(sce.message))
-        # in the very end, close accepted client socket
-        self.client_sock.shutdown(socket.SHUT_RDWR)
-        self.client_sock.close()
-        # .. aand close remote socket
-        if self.remote_sock is not None:
-            self.remote_sock.shutdown(socket.SHUT_RDWR)
-            self.remote_sock.close()
+        # in the very end, close sockets
+        try:
+            self.client_sock.shutdown(socket.SHUT_RDWR)
+            self.client_sock.close()
+            # .. aand close remote socket
+            if self.remote_sock is not None:
+                self.remote_sock.shutdown(socket.SHUT_RDWR)
+                self.remote_sock.close()
+        except OSError as ose:
+            self.logger.error('Exception during closing sockets: {0}'.format(str(ose)))
+        #
+        g_num_threads_alive -= 1
+        self.logger.debug('Ended client thread. {0} threads are alive now.'.format(
+            g_num_threads_alive))
 
     def recv_socks_version(self):
         b = self.client_sock.recv(1)  # protocol version, 1 byte
@@ -298,13 +309,11 @@ class SocksClientThread(threading.Thread):
         # 1) put all sockets in non-blocking mode
         self.client_sock.settimeout(0)
         self.remote_sock.settimeout(0)
-        # 2) lists fro select()
-        rcvlist = [self.client_sock, self.remote_sock]
-        sndlist = [self.client_sock, self.remote_sock]
-        # 3) select() loop
+        # 2) select() loop
         have_error = False
         while not have_error:
-            rrcv, rsnd, rerr = select.select(rcvlist, sndlist, [], 10)
+            rcvlist = [self.client_sock, self.remote_sock]
+            rrcv, rsnd, rerr = select.select(rcvlist, [], [], 20)
             if self.client_sock in rrcv:
                 self.logger.debug('    Client socket is ready for reading!')
                 inp = self.client_sock.recv(4096)
@@ -317,6 +326,8 @@ class SocksClientThread(threading.Thread):
                         have_error = True
                         self.logger.warn('    Could not resend {0} bytes from client '
                                          'to server!'.format(len(inp)))
+                    else:
+                        self.logger.debug('    Resent {0} bytes to remote'.format(len(inp)))
             if self.remote_sock in rrcv:
                 self.logger.debug('    Remote socket is ready for reading!')
                 inp = self.remote_sock.recv(4096)
@@ -329,6 +340,8 @@ class SocksClientThread(threading.Thread):
                         have_error = True
                         self.logger.warn('    Could not resend {0} bytes from remote server '
                                          'to client!'.format(len(inp)))
+                    else:
+                        self.logger.debug('    Resent {0} bytes to client'.format(len(inp)))
         self.logger.debug('  Ending receive/send loop!')
 
 
@@ -374,7 +387,7 @@ class SocksServer:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(self.address)
         self.sock.listen(1)
-        self.sock.settimeout(1)  # 1 sec
+        self.sock.settimeout(10)
         self.logger.info('Listening at {0}'.format(self.address))
         while not self.should_exit:
             try:
@@ -392,7 +405,7 @@ class SocksServer:
                     # by default accepted client socket inherits listening socket timeout settings
                     # reset it to default
                     client_sock.settimeout(None)  # blocking mode
-                    sct = SocksClientThread(client_sock, client_address, daemon=True, dbg_output=self.dbg_output)
+                    sct = SocksClientThread(client_sock, client_address, daemon=False, dbg_output=self.dbg_output)
                     sct.start()
                 else:
                     # just close client socket
